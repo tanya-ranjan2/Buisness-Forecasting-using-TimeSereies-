@@ -1,0 +1,295 @@
+---
+title: "EcoPractical"
+author: "Team 8"
+date: "13/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Prophet Model 
+    • It is a nonlinear regression model 
+    • Prophet is a procedure for forecasting time series data based on an additive model where non-linear trends are fit with yearly, weekly, and daily seasonality, plus holiday effects
+    • It works best with time series that have strong seasonal effects and several seasons of historical data.
+    • It is robust to missing values and shift in trend, handles outliers well
+    • Modeling holidays and special events - [Link to refer](https://facebook.github.io/prophet/docs/seasonality,_holiday_effects,_and_regressors.html)
+    • The model is estimated using a Bayesian approach to allow for automatic selection of the change points and other model characteristics.
+    
+## References of the work
+
+- [Time Series Forecasting With Prophet In R](https://levelup.gitconnected.com/time-series-forecasting-with-prophet-in-r-a9ee81dc82e1)
+- [Seasonality, Holiday Effects, And Regressors](https://facebook.github.io/prophet/docs/seasonality,_holiday_effects,_and_regressors.html)
+- [Generate Quick and Accurate Time Series Forecasts using Facebook’s Prophet (with Python & R codes)](https://www.analyticsvidhya.com/blog/2018/05/generate-accurate-forecasts-facebook-prophet-python-r/)
+    
+## Import all the required libraries
+```{r}
+library(tidyverse)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(tidyverse)
+library(prophet)
+```
+```{r}
+#install.packages("prophet")
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Load training csv file
+```{r}
+train <- readr::read_csv("train.csv")
+```
+## Load test file 
+
+```{r}
+test <- readr::read_csv("test.csv")
+```
+
+
+# View few enteries of train data
+```{r}
+head(train)
+```
+
+
+## Check total Null values in the train data 
+```{r}
+sum(is.na(train))
+```
+
+## Check null values of each columns 
+```{r}
+
+lapply(train,function(x) { length(which(is.na(x)))})
+```
+> There are 2970 completely empty rows in data so we will remove those rows
+> For segement 2 branch id and zone are missing, so we will first deselect those columns and then drop the null values to avoid losing 2nd segemsnt data
+
+```{r}
+raw_data = subset(train, select = -c(branch_id,zone) )
+if (sum(is.na(raw_data))!= 0)
+{
+  data <- na.omit(raw_data)
+} else
+{
+  data <- raw_data
+}
+head(data)
+```
+
+## Check unique values in segement
+```{r}
+unique(data$segment)
+```
+
+
+## Summary of the new data generated after dropping of null values 
+
+```{r}
+summary(data)
+```
+
+## Convert application date in proper date format
+```{r}
+data$application_date <- as.Date(data$application_date, "%d-%m-%Y") 
+```
+```{r}
+head(data$application_date)
+```
+
+
+## Convert application date in proper date format
+```{r}
+train$application_date <- as.Date(train$application_date, "%d-%m-%Y") 
+test$application_date <- as.Date(test$application_date, "%d-%m-%Y") 
+```
+
+```{r}
+head(data$application_date)
+```
+
+## Split the dataset into two seperate dataframe based on 2 segement 
+
+## Splitting test data 
+```{r}
+test_s1 <- test[which(test$segment == 1),]
+
+test_s2 <- test[which(test$segment == 2),]
+```
+
+```{r}
+class(test$application_date) 
+```
+## Splitting train data based on 2 different segemnt 
+```{r}
+# splitting dataframe based on segments 1 and 2
+train_s1 <- train[which(train$segment == 1),]%>%
+  group_by(application_date) 
+
+train_s2 <- train[which(train$segment == 2),]%>%
+  group_by(application_date) 
+```
+```{r}
+train_s1
+```
+
+```{r}
+unique(train_s1$segment)
+```
+
+## Subsetting the train and test data for model building and prediction
+
+```{r}
+df_1 = subset(train_s1, select = c(application_date,no_of_applicants) )
+df_2 = subset(train_s2, select = c(application_date,no_of_applicants) )
+```
+```{r}
+test_s1 = subset(test_s1, select = c(application_date) )
+test_s2 = subset(test_s2, select = c(application_date) )
+```
+```{r}
+head(test_s1)
+```
+
+## Building 4 test and train dataset with variable names “ds” and “y” representing the application_date and no of application counts to accommodate prophet
+
+```{r}
+test_s1 <- mutate (
+test_s1,
+ds = application_date,  # Create new ds column from date using mutate
+
+)
+
+test_s2 <- mutate (
+test_s2,
+ds = application_date,  # Create new ds column from date using mutate
+
+)
+test_s1 = subset(test_s1, select = c(ds) )
+test_s2 = subset(test_s2, select = c(ds) )
+```
+```{r}
+df_1 <- mutate (
+df_1,
+ds = application_date,  # Create new ds column from date using mutate
+y = no_of_applicants   # Create new y column from value using mutate
+)
+
+df_2 <- mutate (
+df_2,
+ds = application_date,  # Create new ds column from date using mutate
+y = no_of_applicants   # Create new y column from value using mutate
+)
+```
+
+
+# Prophet Model building
+```{r}
+# Model building
+m = prophet(df_1)
+future = make_future_dataframe(m, periods = 7)
+forecast = predict(m, future)
+```
+
+```{r}
+tail(forecast)
+
+```
+
+```{r}
+plot(m, forecast)
+
+```
+
+```{r}
+prophet_plot_components(m, forecast)
+```
+
+## Prophet Model Building for segement 1 data with weekly and daily sesonality set as true for better forecast plot
+```{r}
+# Model building
+m = prophet(df_1,weekly.seasonality=TRUE, daily.seasonality=TRUE)
+future = make_future_dataframe(m, periods = 30)
+forecast = predict(m, future)
+```
+
+```{r}
+prophet_plot_components(m, forecast)
+```
+
+## predicting the values for test dataset for segment 1 and storing in y_s1
+```{r}
+y_s1 <- predict(m, test_s1)
+```
+```{r}
+nrow(test_s1)
+```
+
+
+## Adding predicted values for in test dataset where segement is 1 for no. of applicants
+```{r}
+test[test$segment==1, 'no_of_applicants'] <- y_s1$yhat
+```
+
+
+## Prophet Model Building for segement 2 data with weekly and daily sesonality set as true for better forecast plot
+
+```{r}
+# Model building
+m_2 = prophet(df_2,weekly.seasonality=TRUE, daily.seasonality=TRUE)
+future_2 = make_future_dataframe(m_2, periods = 30, include_history = TRUE)
+forecast_2 = predict(m_2, future_2)
+```
+
+
+## Plotting the forcast values 
+```{r}
+prophet_plot_components(m_2, forecast_2)
+```
+
+
+## Summary of the model
+```{r}
+summary(m_2)
+```
+
+
+## Predicting values for in test dataset where segement is 2 for no. of applicants
+```{r}
+y_s2 <- predict(m_2, test_s2)
+```
+
+## length of test data 
+```{r}
+nrow(test)
+```
+
+## Adding predicted values for in test dataset where segement is 2 for no. of applicants
+```{r}
+test[test$segment==2, 'no_of_applicants'] <- y_s2$yhat
+```
+
+## Saving the test data with predicted values as output_files.csv
+```{r}
+write.csv(test, "output_files.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
