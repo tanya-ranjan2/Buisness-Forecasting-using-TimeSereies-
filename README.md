@@ -1,4 +1,4 @@
-# Buisness-Forecasting-using-TimeSereies-
+# Buisness-Forecasting-using-TimeSereies
 
 Neo Bank of India (a fictional bank) receives a lot of requests for its various finance offerings that include housing loans, two-wheeler loans, real estate financing, and microloans. The number of applications received is something that varies a lot with the season. Going through these applications is a manual and tedious process.  Accurately forecasting the number of cases received can help with resource and manpower management resulting in quick response on applications and more efficient processing. 
 
