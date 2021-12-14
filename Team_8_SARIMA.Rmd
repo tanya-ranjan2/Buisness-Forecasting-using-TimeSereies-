@@ -1,0 +1,652 @@
+---
+title: "Time Series Analysis for Banks"
+output:
+  html_document:
+  df_print: paged
+---
+<h3>Team 8:</h3>
+<li>Ronald Wallace G (20BDA10)</li>
+<li>Rishab Sarkar (20BDA26)</li>
+<li>Tanya Ranjan (20BDA32)</li>
+<li>Gunam Ramya Sri (20BDA33)</li>
+<li>Parvathy Charuroopa (20BDA38)</li>
+<li>Bharath Sakthivel(20BDA59)</li>
+```{r}
+# libraries in use:
+library(tidyverse)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(forecast)
+library(tseries)
+library(lubridate)
+library(ggplot2)
+library(lmtest)
+```
+
+<h2>1. Data attaching and pre-processing</h2>
+```{r}
+df_csv <- read.csv("train.csv", header = TRUE, sep = ',') %>% 
+  mutate(application_date = as.Date(application_date, "%d-%m-%Y")) %>%
+  as_tibble()
+head(df_csv)
+```
+<br>
+<h5><b>Checking missing values</b></h5>
+```{r}
+# check for null values
+for (x in c(colnames(df_csv)))
+  {
+    print(paste(x,"-->",sum(is.na(df_csv[x]))))
+  }
+```
+<h6><b>Insights:</b></h6>
+<li> The columns do seem to have missing values</li>
+<li> State and Zone have missing values as well, as they are categorical type cols, they are being treated as class levels instead of null values.</li>
+```{r}
+# removing the null valued data.
+print(paste('orginal',dim(df_csv)))
+rectified_df_csv = na.omit(df_csv)
+print(paste('rectified',dim(rectified_df_csv)))
+```
+<br>
+<h5><b>Converting it into a tsibble object</b></h5>
+```{r}
+# as all the cols have multiple occurrences of the values, we need to create a seperate index var.
+index <- c(1:nrow(rectified_df_csv))
+rectified_df_csv['index'] <- index
+df_tsibble <- rectified_df_csv %>% tsibble::as_tsibble(index = index)
+head(df_tsibble)
+```
+<h2>2. EDA</h2>
+```{r}
+# 1. segment countplot
+ggplot(data = df_csv, aes(x= as.character(segment)))+
+  geom_bar(fill = 'light blue')+
+  ggtitle('Segment countplot')
+
+# 2. segment and number of applications
+
+ggplot(df_csv, aes(x= as.character(segment),
+y = no_of_applicants))+
+geom_bar(stat = 'identity',
+fill = 'light blue')+
+ggtitle('Segment And Number of applicants')
+```
+
+<h6><b>Insights:</b></h6>
+<li> There are more records for Segment 1</li>
+<li> There are more number of applicants for the Segment 2.</li>
+<li> There are some Nan values present</li>
+
+```{r}
+df_csv$year <- as.numeric(format(df_csv$application_date, "%Y"))
+```
+
+```{r}
+# 3. Year segment and no_of_app
+ggplot(df_csv, aes(x= year,
+                   y = no_of_applicants,
+                   fill = as.character(segment)))+
+  geom_bar(stat = 'identity',
+           position = 'stack')+
+  ggtitle('Year, Segment And Number of applicants')
+```
+
+<h6><b>Insights:</b></h6>
+<li> Year 2018 has the highest number of applicants</li>
+<li> Maximum applications from each segment belong to 2018</li>
+<li> 2019 has a good number of applicants considering that it only has data for half year</li>
+
+```{r}
+# 4. plotting the number of applicants based on the zone
+ggplot(df_csv, aes(x= zone,
+                   y = no_of_applicants,
+                   fill = as.character(segment)))+
+  geom_bar(stat = 'identity',
+           position = 'stack')+
+  ggtitle('Segment And Number of applicants')
+```
+
+<h6><b>Insights:</b></h6>
+<li> Zone data is missing for the 2nd Segment</li>
+<li> East and West have the highest number of applicants for the Segment 1.</li>
+
+```{r}
+# 5. Zone Countplot
+ggplot(data=df_csv, aes(x=zone, fill = zone)) +
+geom_bar() +
+geom_text(stat='count', aes(label=..count..), vjust=-1)+
+ggtitle("Zone Countplot") +
+theme_minimal()
+```
+
+<h6><b>Insights:</b></h6>
+<li> East and West have the highest number of records.</li>
+<li> There are more branches in the East zone but the number of applicants come from the West zone</li>
+
+```{r}
+df_csv$Month<- month(df_csv$application_date)
+df_csv$Day <- format(df_csv$application_date, "%d")
+df_csv$Year<- year(df_csv$application_date)
+```
+
+```{r}
+# 6. Number of applicants viwed monthwise and split on the basis of segments
+ggplot(df_csv, aes(x= as.character(Month),
+                   y = no_of_applicants,
+                   fill = as.character(segment)))+
+  geom_bar(stat = 'identity',
+           position = 'stack')+
+  ggtitle('Month, Segment And Number of applicants')
+```
+
+<h6><b>Insights:</b></h6>
+<li> Months 3 5 and 6 have the highest number of applicants.</li>
+```{r}
+# 7. Number of applicants viewed day wise and split on the basis of segments
+
+ggplot(df_csv, aes(x= Day,
+y = no_of_applicants,
+fill = as.character(segment)))+
+geom_bar(stat = 'identity',
+position = 'stack')+
+ggtitle('Day wise Number of applicants')
+```
+<h6><b>Insights:</b></h6>
+<li> Segment 2 has more number of applicants in middle of the month (11 - 25).</li>
+<li> Segment 1 has more number of applicants during the last days of the month (29 - 31)</li>
+
+```{r}
+# 8. TimeSeries based on the segment 
+df_csv$segment = as.factor(df_csv$segment)
+na_trend<- df_csv %>% group_by(segment,application_date) %>% 
+  summarise(No_cases = sum(no_of_applicants))
+
+ggplot(na_trend,aes(x = application_date,y = No_cases,color = segment))+geom_line(stat = "identity")+labs(title = "Number of Applicants on each Segment")+scale_x_date(date_labels = "%b-%Y")+facet_grid(segment~.,scale = "free")
+```
+
+<h6><b>Insights:</b></h6>
+<li> Segment 2 is more stationary than Segment 1.</li>
+<li> Predictions might not be good due to the spikes in Segment 1, we need to use some kind of transformation to work with this Segment. </li>
+<li> There is clearly some seasonality in both the segments</li>
+
+```{r}
+# 9. Yearly Trend
+
+na_trend<-df_csv%>%group_by(Year,application_date)%>%summarise(No_cases = sum(no_of_applicants))
+
+ggplot(na_trend,aes(x = application_date,y = No_cases ,color = as.character(Year)))+geom_line(stat = "identity")+labs(title = "Applicants trend for each Year")+scale_x_date(date_labels = "%b-%Y")+facet_grid(Year~.,scale = "free")
+
+```
+<h6><b>Insights:</b></h6>
+<li> There seems to be an upward trend for the year 2017 as well.</li>
+<li> The data for the year 2017 seems to be heteroscedastic in nature as well.</li>
+<li> The seasonality is clearly visible off the years.</li>
+
+<br><br>
+
+<h2>3. Working on the atomic level (bottom up approach)</h2>
+```{r}
+# grouping the data
+grouped_df_tibble = df_tsibble %>% group_by(branch_id)
+b1 <-  grouped_df_tibble[grouped_df_tibble['branch_id']==1,]
+head(b1,10)
+
+b1_ts = ts(b1$no_of_applicants, start = min(b1$application_date), end = max(b1$application_date))
+# time series plot
+autoplot(b1_ts)
+
+# 1. ACF:
+acf(b1_ts)
+```
+<b>insights:</b> the data is non-stationary [minimal]
+
+```{r}
+# 2. PACF:
+pacf(b1_ts)
+```
+
+<b>insights:</b> the data is non-stationary [minimal]
+```{r}
+# 3. ADF test:
+# H0 : Data is non-stationary
+# H1 : Data is stationary
+adf.test(b1_ts)
+```
+
+<b>insights:</b> the p-value is 0.01 which is <0.05; indicating we need to reject the null hypothesis stating that the data is stationary.
+```{r}
+# 4. auto ARIMA
+# information criteria (ic) = akaike information criterion ['aic']
+
+b1_model = auto.arima(b1_ts, ic ='aic', trace = TRUE)
+```
+
+<b>Best model:</b> ARIMA(1,0,1) with non-zero mean : 10020.11
+
+```{r}
+# 5. model summary:
+summary(b1_model)
+
+# 6. Check for residuals:
+# 6.1. ACF
+acf(ts(b1_model$residuals))
+
+# 6.2. PACF
+pacf(ts(b1_model$residuals))
+```
+
+ <b>insights:</b> the residuals have no auto correlation
+```{r}
+# forecasting using the same model
+b1_forcast = forecast(b1_model, level = c(95), h = 100)
+plot(b1_forcast)
+
+# 7. Checking our model performance using Box.test
+# H0: there is serial correlation
+# H1: there is no serial correlation
+# when the p-value is < 0.05 we reject H0.
+
+# Box Test : lag 5
+Box.test(b1_forcast$resid, lag=5, type="Ljung-Box")
+
+# Box Test : lag 10
+Box.test(b1_forcast$resid, lag=10, type="Ljung-Box")
+
+# Box Test : lag 15
+Box.test(b1_forcast$resid, lag=15, type="Ljung-Box")
+
+```
+<b>Insights: </b>
+<li> At this point we can see that the p-value is > 0.05 for lag values ranging from 5 to 15, so we reject the null hypothesis.</li>
+<li> Working on the atomic level might give us better values but will computationally heavy as there as there are 84 branches and 2 segments for each that makes a total of 168 models.</li>
+
+<br>
+<br>
+
+Q. Did we go with this is method?<br>
+<b>No</b>
+
+<h2>4. Working at the Top level (Top Down Approach)<h2>
+```{r}
+# null value rectification (re-done)
+# Reason : The second segment was completely lost when we removed the Nan values, for the top level we don't need to remove all the null values, only the rows with all column values as Nan / Null need to be dropped.
+
+print(paste('orginal',dim(df_csv)))
+required_cols <- c('application_date', 'segment', 'no_of_applicants')
+sliced_df <- df_csv[required_cols]
+
+# check for null vals:
+for (x in c(colnames(sliced_df)))
+  {
+    print(paste(x,"-->",sum(is.na(sliced_df[x]))))
+  }
+
+# omit the rows with value as Nan:
+rectified_sliced_df = na.omit(sliced_df)
+print(paste('rectified',dim(rectified_sliced_df)))
+
+# tibble -> tsibble
+index <- c(1:nrow(rectified_sliced_df))
+rectified_sliced_df['index'] <- index
+sliced_tsibble <- rectified_sliced_df %>% tsibble::as_tsibble(index = index)
+head(sliced_tsibble)
+```
+
+
+```{r}
+train_df <- sliced_tsibble[c('application_date', 'no_of_applicants')] %>% group_by(application_date) %>% summarise(sum_val = sum(no_of_applicants))
+
+# trend
+trend = forecast::ma(train_df$sum_val, order=30, centre = T)
+plot(as.ts(train_df$sum_val))
+lines(trend)
+
+# Seasonality
+season =  ts(train_df$sum_val) - trend
+plot(season)
+
+# random noise:
+noise = ts(train_df$sum_val) - trend - season
+plot(noise)
+```
+<b>insights: </b>
+<li> There is Trend in the data</li>
+<li> There is Seasonality in the data</li>
+<li> There is no noise present in the data</li>
+<li> There is some heteroscedastic up to time value 300-350</li>
+```{r}
+train_ts <- ts(train_df$sum_val)
+BoxCox.lambda(train_ts)
+# there is heteroscedasticity that we need to take into account.
+BoxCox.lambda(log(train_ts))
+# we see that the log transform reduces heteroscedasticity
+plot(log(train_ts), ylab='log transform')
+plot(train_ts, ylab='original')
+```
+
+```{r}
+# seasonal derivative
+train_ts.sdiff <- diff(log(train_ts),lag=12, differences = 1)
+ggtsdisplay(train_ts.sdiff)
+```
+<b>insights:</b>
+<li> ACF captures Seasonality</li>
+```{r}
+# regular derivative
+train_ts.rdiff <- diff(log(train_ts))
+ggtsdisplay(train_ts.rdiff)
+```
+
+<b>insights:</b>
+<li> ACF is better for regualr derivative</li>
+```{r}
+# combining the 2
+train_ts.rdiff.sdiff <- diff(diff(log(train_ts), lag=12))
+ggtsdisplay(train_ts.rdiff.sdiff, )
+log_train_ts <- log(train_ts)
+```
+<b>insights:</b>
+<li> PACF and ACF is better when we combine the derivatives</li>
+
+<br><br>
+
+<h2>5 Working on the entire Dataset [No Segment]</h2>
+```{r}
+# fitting a SARIMA Model.
+
+auto.arima(log_train_ts)
+# ARIMA(3,1,3) with drift 
+
+# adding the seasonal values
+fit1 <- Arima(log_train_ts, 
+               order=c(3,1,3),
+               seasonal = c(0,1,1),
+               lambda = NULL,
+               include.constant = TRUE)
+
+autoplot(fit1)
+```
+
+<b>Insights: </b> The roots are within the circle which makes it ideal.
+```{r}
+# significant coefficients for z test
+coeftest(fit1)
+checkresiduals(fit1)
+```
+
+<b>Insights: </b> The residuals can be improved.
+```{r}
+summary(fit1)
+```
+<b>Insights: </b> The MAPE value is 3.11% which is a good indicator.
+```{r}
+# plotting the same to have a better visual for model 1
+autoplot(train_ts) +
+  autolayer(exp(fit1$fitted), series = 'Model 1 predictions')
+```
+<b>Insights: </b> The model seems to identify the trends well.
+```{r}
+# tunig the parameters to have a better fit
+fit2 <- Arima(log_train_ts, 
+               order=c(4,2,4),
+               seasonal = c(0,3,3),
+               lambda = NULL,
+               include.constant = TRUE)
+autoplot(fit2)
+```
+<b>Insights: </b> The roots are just on the boundary.
+
+```{r}
+# z test of coefficients are significant
+coeftest(fit2)
+checkresiduals(fit2)
+summary(fit2)
+```
+<b>Insights: </b> The MAPE value was reduced here to 3.02%.
+```{r}
+# predictions for model 2
+autoplot(train_ts) +
+  autolayer(exp(fit2$fitted), series = 'Model 2 predictions')
+```
+<b>Insights: </b> The model seems to over identify the patterns. The spike at 500 prominently shows that. Model 1 performs better that model 2.
+
+<br><br>
+
+<h2>6. Segment wise predictions</h2>
+```{r}
+# Data set split on the basis of segment value. 
+# SEGMENT 1
+train_seg1 = sliced_tsibble[sliced_tsibble['segment']==1,]
+
+train_seg1 = train_seg1[c('application_date', 'no_of_applicants')] %>% group_by(application_date) %>% summarise(sum_val = sum(no_of_applicants))
+
+dim(train_seg1)
+
+# SEGMENT 2
+train_seg2 = sliced_tsibble[sliced_tsibble['segment']==2,]
+
+train_seg2 = train_seg2[c('application_date', 'no_of_applicants')] %>% group_by(application_date) %>% summarise(sum_val = sum(no_of_applicants))
+
+dim(train_seg2)
+
+# range of dates for segment 1
+c(min(train_seg1$application_date), max(train_seg1$application_date))
+
+# range of dates for segment 2
+c(min(train_seg2$application_date), max(train_seg2$application_date))
+```
+
+```{r}
+# Segment 1:
+# plotting the segment 1 data
+ggtsdisplay(ts(train_seg1$sum_val))
+ggtsdisplay(ts(log(train_seg1$sum_val)))
+```
+<b>it's clear that log transform reduces the variance in the data.</b>
+
+```{r}
+BoxCox.lambda(ts(train_seg1$sum_val))
+# there is heteroscedasticity that we need to take into account.
+BoxCox.lambda(ts(log(train_seg1$sum_val)))
+
+train_seg1_ts <- ts(log(train_seg1$sum_val))
+# ARIMA(0,1,4) with drift 
+auto.arima(train_seg1_ts)
+
+
+# model 1 for Segment 1:
+s1_fit1 <- Arima(train_seg1_ts, 
+               order=c(1,1,4),
+               seasonal = c(1,1,0),
+               lambda = NULL,
+               include.constant = TRUE)
+autoplot(s1_fit1)
+```
+<b>The roots are wihin the circle which is a good indication.</b>
+
+```{r}
+coeftest(s1_fit1)
+checkresiduals(s1_fit1)
+```
+
+<b>The resicuals have no correlation.</b>
+```{r}
+summary(s1_fit1)
+```
+```{r}
+autoplot(ts(train_seg1$sum_val)) +
+  autolayer(exp(s1_fit1$fitted), series = 'Model 1 predictions')
+```
+<b>Insights: </b> The model seems to underfit, needs improvement.
+```{r}
+# model 2 for Segment 1
+s1_fit2 <- Arima(train_seg1_ts, 
+               order=c(3,0,4),
+               seasonal = c(1,1,0),
+               lambda = NULL,
+               include.constant = TRUE)
+autoplot(s1_fit2)
+```
+
+<b>The roots are just on the boundary.</b> 
+```{r}
+coeftest(s1_fit2)
+checkresiduals(s1_fit2)
+```
+
+<b>The residuals have no correlation.</b>
+```{r}
+# For comparison purpose:
+# AIC=2294.91   AICc=2295.06   BIC=2327.48 -> 1,1,4 -> model 1
+# AIC=2315.52   AICc=2315.71   BIC=2352.75 -> 3,0,3
+# AIC=2292.30   AICc=2292.53   BIC=2334.19 -> 3,0,4
+summary(s1_fit2)
+```
+```{r}
+autoplot(ts(train_seg1$sum_val)) +
+  autolayer(exp(s1_fit2$fitted), series = 'Model 2 predictions')
+```
+<b>Insights: </b> The model seems to fit the data better than the previous one.
+```{r}
+# predictions through 1st model
+s1_forcast_fit1 = forecast(s1_fit1, level = c(95), h = 30)
+s1_forcast_fit1_pred <- c(exp(s1_forcast_fit1$mean))
+plot(s1_forcast_fit1)
+```
+<b>Insights: </b> Model 1 predicts that the mean value will be more or less constant .
+
+```{r}
+# predictions through 2nd model
+s1_forcast_fit2 = forecast(s1_fit2, level = c(95), h = 30)
+s1_forcast_fit2_pred <- c(exp(s1_forcast_fit2$mean))
+plot(s1_forcast_fit2)
+
+```
+<b>Insights: </b> Model 2 predicts that the mean value will decrease [move downwards].
+```{r}
+# Segment 2:
+# plotting the segment 2 data
+ggtsdisplay(ts(train_seg2$sum_val))
+ggtsdisplay(ts(log(train_seg2$sum_val)))
+```
+
+<b>Insights: </b>it's clear that log transform reduces the variation in the data
+```{r}
+BoxCox.lambda(ts(train_seg2$sum_val))
+# there is heteroscedasticity that we need to take into account.
+BoxCox.lambda(ts(log(train_seg2$sum_val)))
+
+train_seg2_ts <- ts(log(train_seg2$sum_val))
+# ARIMA(2,1,1) with drift
+auto.arima(train_seg2_ts)
+ 
+
+s2_fit1 <- Arima(train_seg2_ts, 
+               order=c(2,1,1),
+               seasonal = c(1,1,0),
+               lambda = NULL,
+               include.constant = TRUE)
+autoplot(s2_fit1)
+```
+<b>Insights: </b> The roots within boundary.
+
+```{r}
+coeftest(s2_fit1)
+checkresiduals(s2_fit1)
+```
+<b>The residuals have no correlation.</b>
+```{r}
+# for comparison purpose:
+# AIC=1149.96   AICc=1150.01   BIC=1168.77 -> (2,1,1) [no seasonal]
+# AIC=1151.91   AICc=1151.98   BIC=1175.41 -> (2,1,1) [3,1,0]
+summary(s2_fit1)
+```
+<b>Insights: </b> The MAPE value is 3.67%
+```{r}
+autoplot(ts(train_seg2$sum_val)) +
+  autolayer(exp(s2_fit1$fitted), series = 'Model 2 predictions')
+```
+<b>Insights: </b> The model seems to identify the pattern but there can be some improvements.
+```{r}
+s2_fit2 <- Arima(train_seg2_ts, 
+               order=c(3,2,1),
+               seasonal = c(1,1,0),
+               lambda = NULL,
+               include.constant = TRUE)
+autoplot(s2_fit2)
+```
+
+<b>Insights: </b> The roots within boundary.
+```{r}
+coeftest(s2_fit2)
+checkresiduals(s2_fit2)
+```
+
+<b>The residuals have slight correlation. [minimal]</b>
+```{r}
+summary(s2_fit2)
+```
+<b>Insights: </b> The MAPE value is 3.67%
+```{r}
+autoplot(ts(train_seg2$sum_val)) +
+  autolayer(exp(s2_fit2$fitted), series = 'Model 2 predictions')
+```
+<b>Insights: </b> The model seems to identify the pattern slightly better than the previous model.
+```{r}
+# predictions through 1st model
+s2_forcast_fit1 = forecast(s2_fit1, level = c(95), h = 30)
+plot(s2_forcast_fit1)
+s2_forcast_fit1_pred <- c(exp(s2_forcast_fit1$mean))
+
+# predictions through 2nd model
+s2_forcast_fit2 = forecast(s2_fit2, level = c(95), h = 30)
+plot(s2_forcast_fit2)
+s2_forcast_fit2_pred <- c(exp(s1_forcast_fit2$mean))
+```
+<h2>7. Making the submission files:<h2>
+```{r}                         
+sub_csv <- read.csv("sample_submission.csv", header = TRUE, sep = ',')
+
+# combination s1f1 and s2f1
+sub_csv1 <- sub_csv
+sub_csv1$no_of_applicants <- c(s1_forcast_fit1_pred,s2_forcast_fit1_pred)
+
+# MAPE : 1088.57163[Public Score]
+write.csv(sub_csv1, "output_files\\rs_s1f1_s2f1.csv")
+
+# combination s1f2 and s2f2
+sub_csv2 <- sub_csv
+sub_csv2$no_of_applicants <- c(s1_forcast_fit2_pred,s2_forcast_fit2_pred)
+
+# MAPE : 516.06122 [Public Score] [Best SARIMA predictions]
+write.csv(sub_csv2, "output_files\\rs_s1f2_s2f2.csv")
+
+# combination s1f1 and s2f2
+sub_csv3 <- sub_csv
+sub_csv3$no_of_applicants <- c(s1_forcast_fit1_pred,s2_forcast_fit2_pred)
+
+# MAPE : 1063.58497 [Public Score]
+write.csv(sub_csv3, "output_files\\rs_s1f1_s2f2.csv")
+
+# combination s1f2 and s2f1
+sub_csv4 <- sub_csv
+sub_csv4$no_of_applicants <- c(s1_forcast_fit2_pred,s2_forcast_fit1_pred)
+
+# MAPE : 541.04788 [Public Score]
+write.csv(sub_csv4, "output_files\\rs_s1f2_s2f1.csv")
+```
+<h2>8. Conclusion:</h2>
+<li> The improved models predictions came out to be better as as expected.</li>
+<li> The base models for the same were generated through auto.arima() but still couldn't identify the patterns completely.</li>
+<li> The combinations were made to see which is the rectified model that gives a higher error, the reason behind the high MAPE values. It turns out that the segment 1 base model and the rectified model are unable to identify the pattern completely, the very reason for the high MAPE value.</li>
+<li> The MAPE value can be further reduced by better feature engineering or optimizing the parameters.</li>
+
+<br><br>
+<h2>9. References:</h2>
+<li> Trend and Seasonality check: https://anomaly.io/seasonal-trend-decomposition-in-r/index.html</li>
+<li> ARIMA -> SARIMA : https://www.rdocumentation.org/packages/astsa/versions/1.14/topics/sarima</li>
+<li> Group and summarize the data : https://www.statology.org/group-summarize-data-r/</li>
+<li> EDA ref: https://otexts.com/fpp3/tsibbles.html</li>
